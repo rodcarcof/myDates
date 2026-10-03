@@ -1,5 +1,7 @@
 import { Fragment, useEffect, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
 import type { CalendarEvent } from "../domain/calendar-event";
+import type { Workspace } from "../domain/workspace";
+import type { CalendarCategory } from "../domain/calendar-category";
 import { expandEvents, type CalendarOccurrence } from "../domain/recurrence";
 import type { CalendarView } from "./CalendarToolbar";
 
@@ -17,6 +19,9 @@ type CalendarGridProps = {
   calendarStartDate: Date;
   onMoveEvent: (eventId: string, startAt: string) => void;
   onResizeEvent: (eventId: string, startAt: string, endAt: string) => void;
+  workspaces: Workspace[];
+  categories: CalendarCategory[];
+  isWidget?: boolean;
 };
 
 type DragState = { eventId: string; sourceEvent: CalendarEvent; durationHours: number; offsetY: number; originX: number; originY: number; moved: boolean };
@@ -25,8 +30,7 @@ type ResizeEdge = "start" | "end";
 type ResizeState = { eventId: string; edge: ResizeEdge; startDate: Date; endDate: Date };
 type ResizePreview = { eventId: string; startHour: number; endHour: number; startAt: string; endAt: string };
 
-const HEADER_HEIGHT = 64;
-const HOUR_HEIGHT = 62;
+const HEADER_HEIGHT = 52;
 
 const daysByView: Record<CalendarView, number> = {
   day: 1,
@@ -141,6 +145,8 @@ function CalendarGrid({
   calendarStartDate,
   onMoveEvent,
   onResizeEvent,
+  categories,
+  isWidget = false,
 }: CalendarGridProps) {
   const upcomingDays = createUpcomingDays(calendarStartDate);
   const eventLayerRef = useRef<HTMLDivElement>(null);
@@ -150,6 +156,7 @@ function CalendarGrid({
   const [draggedEventId, setDraggedEventId] = useState<string | null>(null);
   const [dragPreview, setDragPreview] = useState<DragPreview | null>(null);
   const [resizePreview, setResizePreview] = useState<ResizePreview | null>(null);
+  const [viewportHeight, setViewportHeight] = useState(() => window.innerHeight);
 
   const visibleDays = upcomingDays.slice(
     0,
@@ -160,6 +167,13 @@ function CalendarGrid({
     { length: visibleEndHour - visibleStartHour + 1 },
     (_, index) => visibleStartHour + index,
   );
+  // El widget no debe encoger las horas para intentar mostrar el día entero:
+  // mantiene bloques legibles y el contenedor permite desplazarse con la rueda.
+  const hourHeight = isWidget
+    ? 72
+    : Math.max(24, Math.min(62, Math.floor((viewportHeight - 250) / hours.length)));
+
+  useEffect(() => { const updateHeight = () => setViewportHeight(window.innerHeight); window.addEventListener("resize", updateHeight); return () => window.removeEventListener("resize", updateHeight); }, []);
 
   const visibleEvents = expandEvents(
     events,
@@ -183,7 +197,7 @@ function CalendarGrid({
     const bounds = layer.getBoundingClientRect();
     const dayIndex = Math.max(0, Math.min(visibleDays.length - 1, Math.floor((clientX - bounds.left) / (bounds.width / visibleDays.length))));
     const maximumStartHour = Math.max(visibleStartHour, visibleEndHour + 1 - drag.durationHours);
-    const rawStartHour = visibleStartHour + (clientY - bounds.top - drag.offsetY) / HOUR_HEIGHT;
+    const rawStartHour = visibleStartHour + (clientY - bounds.top - drag.offsetY) / hourHeight;
     const startHour = Math.max(visibleStartHour, Math.min(maximumStartHour, Math.round(rawStartHour * 4) / 4));
     const startDate = new Date(visibleDays[dayIndex].date);
     startDate.setHours(Math.floor(startHour), Math.round((startHour % 1) * 60), 0, 0);
@@ -206,7 +220,7 @@ function CalendarGrid({
     const layer = eventLayerRef.current;
     if (!layer) return null;
     const bounds = layer.getBoundingClientRect();
-    const requestedHour = Math.round((visibleStartHour + (clientY - bounds.top) / HOUR_HEIGHT) * 4) / 4;
+    const requestedHour = Math.round((visibleStartHour + (clientY - bounds.top) / hourHeight) * 4) / 4;
     const originalStartHour = getHourValue(resize.startDate);
     const originalEndHour = getHourValue(resize.endDate);
     const minimumDuration = 0.25;
@@ -300,9 +314,9 @@ function CalendarGrid({
         style={
           {
             "--header-height": `${HEADER_HEIGHT}px`,
-            "--hour-height": `${HOUR_HEIGHT}px`,
-            gridTemplateColumns: `64px repeat(${visibleDays.length}, minmax(126px, 1fr))`,
-            gridTemplateRows: `${HEADER_HEIGHT}px repeat(${hours.length}, ${HOUR_HEIGHT}px)`,
+            "--hour-height": `${hourHeight}px`,
+            gridTemplateColumns: `48px repeat(${visibleDays.length}, minmax(0, 1fr))`,
+            gridTemplateRows: `${HEADER_HEIGHT}px repeat(${hours.length}, ${hourHeight}px)`,
           } as CSSProperties
         }
       >
@@ -334,7 +348,7 @@ function CalendarGrid({
           ref={eventLayerRef}
           className="event-layer"
           style={{
-            gridTemplateColumns: `repeat(${visibleDays.length}, minmax(126px, 1fr))`,
+            gridTemplateColumns: `repeat(${visibleDays.length}, minmax(0, 1fr))`,
           }}
         >
           {visibleDays.map((day, dayIndex) => {
@@ -353,17 +367,20 @@ function CalendarGrid({
                   const durationHours = endHour - startHour;
                   const placement = overlapLayout.get(event.id) ?? { column: 0, columns: 1 };
                   const columnWidth = 100 / placement.columns;
+                  const category = categories.find((item) => item.id === event.sourceEvent.categoryId) ?? categories.find((item) => item.name === event.category);
+                  const isShort = durationHours * hourHeight < 48;
 
                   return (
                     <article
                       key={event.id}
-                      className={`calendar-event event-${event.category} event-${event.status}${draggedEventId === event.sourceEvent.id ? " is-dragging" : ""}${event.sourceEvent.recurrence ? " is-recurring" : ""}`}
+                      className={`calendar-event event-${event.category} event-${event.status}${isShort ? " is-short" : ""}${draggedEventId === event.sourceEvent.id ? " is-dragging" : ""}${event.sourceEvent.recurrence ? " is-recurring" : ""}`}
                       style={{
                         left: `calc(${placement.column * columnWidth}% + 4px)`,
                         right: "auto",
                         width: `calc(${columnWidth}% - 8px)`,
-                        top: `${(startHour - visibleStartHour) * HOUR_HEIGHT + 4}px`,
-                        height: `${durationHours * HOUR_HEIGHT - 8}px`,
+                        top: `${(startHour - visibleStartHour) * hourHeight + 4}px`,
+                        height: `${isWidget ? Math.max(durationHours * hourHeight - 8, 38) : durationHours * hourHeight - 8}px`,
+                        ...((category?.color ?? event.categoryColor) && event.status !== "completed" ? { backgroundColor: category?.color ?? event.categoryColor } : {}),
                       }}
                       onPointerDown={(pointerEvent) => startEventInteraction(pointerEvent, event.sourceEvent, durationHours, startDate, endDate, Boolean(event.sourceEvent.recurrence))}
                       onPointerUp={(pointerEvent) => {
@@ -427,8 +444,8 @@ function CalendarGrid({
               style={{
                 left: `calc(${dragPreview.dayIndex * (100 / visibleDays.length)}% + 5px)`,
                 width: `calc(${100 / visibleDays.length}% - 10px)`,
-                top: `${(dragPreview.startHour - visibleStartHour) * HOUR_HEIGHT + 4}px`,
-                height: `${dragRef.current.durationHours * HOUR_HEIGHT - 8}px`,
+                top: `${(dragPreview.startHour - visibleStartHour) * hourHeight + 4}px`,
+                height: `${dragRef.current.durationHours * hourHeight - 8}px`,
               }}
             >
               Soltar para reprogramar

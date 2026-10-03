@@ -1,17 +1,25 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import type { User } from "@supabase/supabase-js";
 import AppHeader from "./components/AppHeader";
 import CalendarGrid from "./components/CalendarGrid";
 import CalendarSettings from "./components/CalendarSettings";
+import CategorySettings from "./components/CategorySettings";
+import NewWorkspaceDialog from "./components/NewWorkspaceDialog";
+import WorkspacePanel from "./components/WorkspacePanel";
 import TasksPanel from "./components/TasksPanel";
 import NewEventDialog, {
   type NewEventInput,
 } from "./components/NewEventDialog";
 import SidebarRail from "./components/SidebarRail";
 import type { AppSection } from "./components/SidebarMenu";
-import { demoEvents } from "./data/demo-events";
-import { loadCalendarSettings, loadEvents, loadTasks, saveCalendarSettings, saveEvents, saveTasks } from "./data/event-store";
+import { clearLocalMyDateData, loadCalendarCategories, loadCalendarSettings, loadEvents, loadTasks, loadWorkspaceNotes, loadWorkspaces, saveCalendarCategories, saveCalendarSettings, saveEvents, saveTasks, saveWorkspaceNotes, saveWorkspaces } from "./data/event-store";
+import { clearCloudData, deleteCloudEvent, deleteCloudNote, deleteCloudTask, loadCloudState, syncCloudState, type CloudState } from "./data/supabase-store";
 import type { CalendarEvent } from "./domain/calendar-event";
 import type { Task } from "./domain/task";
+import type { Workspace } from "./domain/workspace";
+import type { WorkspaceNote } from "./domain/workspace-note";
+import { defaultCalendarCategories } from "./domain/calendar-category";
+import { expandEvents } from "./domain/recurrence";
 import CalendarToolbar, {
   type CalendarView,
 } from "./components/CalendarToolbar";
@@ -24,20 +32,37 @@ type DialogEvent = "new" | CalendarEvent | null;
 
 const daysByView: Record<CalendarView, number> = { day: 1, "three-days": 3, "five-days": 5, week: 7 };
 
-function App() {
+type AppProps = { user: User };
+
+function App({ user }: AppProps) {
   const [selectedView, setSelectedView] = useState<CalendarView>("week");
   const [calendarStartDate, setCalendarStartDate] = useState(() => new Date());
   const [startHour, setStartHour] = useState(8);
   const [endHour, setEndHour] = useState(23);
-  const [events, setEvents] = useState<CalendarEvent[]>(demoEvents);
+  const [events, setEvents] = useState<CalendarEvent[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
+  const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
+  const [workspaceNotes, setWorkspaceNotes] = useState<WorkspaceNote[]>([]);
+  const [categories, setCategories] = useState(defaultCalendarCategories);
+  const [areCategoriesLoaded, setAreCategoriesLoaded] = useState(false);
   const [isEventsLoaded, setIsEventsLoaded] = useState(false);
   const [areTasksLoaded, setAreTasksLoaded] = useState(false);
   const [areCalendarSettingsLoaded, setAreCalendarSettingsLoaded] = useState(false);
+  const [areWorkspacesLoaded, setAreWorkspacesLoaded] = useState(false);
+  const [areWorkspaceNotesLoaded, setAreWorkspaceNotesLoaded] = useState(false);
   const [notificationPermission, setNotificationPermission] = useState<NotificationPermission | "unsupported">(() => "Notification" in window ? Notification.permission : "unsupported");
   const [dialogEvent, setDialogEvent] = useState<DialogEvent>(null);
   const [activeSection, setActiveSection] = useState<AppSection>("calendar");
   const [celebration, setCelebration] = useState<Celebration | null>(null);
+  const [activeWorkspaceId, setActiveWorkspaceId] = useState<string | null>(null);
+  const [isWorkspaceDialogOpen, setIsWorkspaceDialogOpen] = useState(false);
+  const [isCloudReady, setIsCloudReady] = useState(false);
+  const [isDataResetConfirmationOpen, setIsDataResetConfirmationOpen] = useState(false);
+  const [isResettingData, setIsResettingData] = useState(false);
+  const [isWidgetWindow, setIsWidgetWindow] = useState(false);
+  const cloudSyncTimer = useRef<number | null>(null);
+  const skipNextCloudSync = useRef(false);
+  const hasPersistedLocalData = useRef(false);
 
   const completedEvents = events.filter(
     (event) => event.status === "completed",
@@ -46,7 +71,10 @@ function App() {
   useEffect(() => {
     loadEvents()
       .then((storedEvents) => {
-        if (storedEvents) setEvents(storedEvents);
+        if (storedEvents) {
+          setEvents(storedEvents);
+          if (storedEvents.length > 0) hasPersistedLocalData.current = true;
+        }
       })
       .catch(() => {
         // IndexedDB may be disabled; the app remains usable for this session.
@@ -55,10 +83,121 @@ function App() {
   }, []);
 
   useEffect(() => {
+    if (!("__TAURI_INTERNALS__" in window)) return;
+    import("@tauri-apps/api/window")
+      .then(({ getCurrentWindow }) => setIsWidgetWindow(getCurrentWindow().label === "widget"))
+      .catch(() => setIsWidgetWindow(false));
+  }, []);
+
+  useEffect(() => {
+    if (!("__TAURI_INTERNALS__" in window)) return;
+    let removeListener: (() => void) | undefined;
+    import("@tauri-apps/api/event")
+      .then(async ({ listen }) => {
+        removeListener = await listen<CloudState>("mydate:data-synchronized", ({ payload }) => {
+          // La otra ventana ya confirmó la escritura. Aplicamos sus datos aquí
+          // directamente: no se recarga la WebView ni se produce parpadeo.
+          skipNextCloudSync.current = true;
+          setEvents(payload.events);
+          setTasks(payload.tasks);
+          setWorkspaces(payload.workspaces);
+          setWorkspaceNotes(payload.notes);
+          setCategories(payload.categories.length ? payload.categories : defaultCalendarCategories);
+          setStartHour(payload.settings.startHour);
+          setEndHour(payload.settings.endHour);
+          setSelectedView(payload.settings.selectedView ?? "week");
+        });
+      })
+      .catch((error) => console.error("No fue posible escuchar la sincronización del widget.", error));
+
+    return () => removeListener?.();
+  }, []);
+
+  useEffect(() => {
+    if (!isEventsLoaded || !areTasksLoaded || !areWorkspacesLoaded || !areWorkspaceNotesLoaded || !areCalendarSettingsLoaded || !areCategoriesLoaded) return;
+    loadCloudState(user.id).then((cloud) => {
+      // Los datos locales son la fuente de verdad en este prototipo. Supabase
+      // solo hidrata una instalación nueva para evitar que una copia antigua
+      // borre bloques que ya existen en el dispositivo.
+      if (!cloud || hasPersistedLocalData.current) return;
+      setEvents(cloud.events);
+      setTasks(cloud.tasks);
+      setWorkspaces(cloud.workspaces);
+      setWorkspaceNotes(cloud.notes);
+      if (cloud.categories.length) setCategories(cloud.categories);
+      setStartHour(cloud.settings.startHour);
+      setEndHour(cloud.settings.endHour);
+      setSelectedView(cloud.settings.selectedView ?? "week");
+    }).catch((error) => {
+      console.error("No fue posible cargar los datos de Supabase.", error);
+    }).finally(() => setIsCloudReady(true));
+  }, [user.id, isEventsLoaded, areTasksLoaded, areWorkspacesLoaded, areWorkspaceNotesLoaded, areCalendarSettingsLoaded, areCategoriesLoaded]);
+
+  useEffect(() => {
+    if (!isCloudReady) return;
+    if (skipNextCloudSync.current) {
+      skipNextCloudSync.current = false;
+      return;
+    }
+    if (cloudSyncTimer.current) window.clearTimeout(cloudSyncTimer.current);
+    cloudSyncTimer.current = window.setTimeout(() => {
+      syncCloudState(user.id, { events, tasks, workspaces, notes: workspaceNotes, categories, settings: { startHour, endHour, selectedView } })
+        .then(async () => {
+          if (!("__TAURI_INTERNALS__" in window)) return;
+          const { emitTo } = await import("@tauri-apps/api/event");
+          await emitTo(isWidgetWindow ? "main" : "widget", "mydate:data-synchronized", {
+            events,
+            tasks,
+            workspaces,
+            notes: workspaceNotes,
+            categories,
+            settings: { startHour, endHour, selectedView },
+          } satisfies CloudState);
+        })
+        .catch((error) => {
+          console.error("No fue posible guardar los datos en Supabase.", error);
+        });
+    }, 700);
+    return () => { if (cloudSyncTimer.current) window.clearTimeout(cloudSyncTimer.current); };
+  }, [user.id, events, tasks, workspaces, workspaceNotes, categories, startHour, endHour, selectedView, isCloudReady, isWidgetWindow]);
+
+  useEffect(() => {
+    loadWorkspaceNotes().then((storedNotes) => {
+      if (storedNotes) {
+        setWorkspaceNotes(storedNotes);
+        if (storedNotes.length > 0) hasPersistedLocalData.current = true;
+      }
+    }).catch(() => {}).finally(() => setAreWorkspaceNotesLoaded(true));
+  }, []);
+
+  useEffect(() => {
+    loadCalendarCategories().then((storedCategories) => {
+      if (storedCategories?.length) {
+        setCategories(storedCategories);
+      }
+    }).catch(() => {}).finally(() => setAreCategoriesLoaded(true));
+  }, []);
+
+  useEffect(() => {
+    if (!areCategoriesLoaded) return;
+    saveCalendarCategories(categories).catch(() => {});
+  }, [categories, areCategoriesLoaded]);
+
+  useEffect(() => {
+    loadWorkspaces().then((storedWorkspaces) => {
+      if (storedWorkspaces) {
+        setWorkspaces(storedWorkspaces);
+        if (storedWorkspaces.length > 0) hasPersistedLocalData.current = true;
+      }
+    }).finally(() => setAreWorkspacesLoaded(true));
+  }, []);
+
+  useEffect(() => {
     loadCalendarSettings().then((storedSettings) => {
       if (!storedSettings) return;
       setStartHour(storedSettings.startHour);
       setEndHour(storedSettings.endHour);
+      if (storedSettings.selectedView) setSelectedView(storedSettings.selectedView);
     }).catch(() => {
       // The default range remains available when persistence is unavailable.
     }).finally(() => setAreCalendarSettingsLoaded(true));
@@ -66,7 +205,10 @@ function App() {
 
   useEffect(() => {
     loadTasks().then((storedTasks) => {
-      if (storedTasks) setTasks(storedTasks);
+      if (storedTasks) {
+        setTasks(storedTasks);
+        if (storedTasks.length > 0) hasPersistedLocalData.current = true;
+      }
     }).catch(() => {
       // The tasks module remains usable when IndexedDB is unavailable.
     }).finally(() => setAreTasksLoaded(true));
@@ -88,13 +230,23 @@ function App() {
 
   useEffect(() => {
     if (!areCalendarSettingsLoaded) return;
-    saveCalendarSettings({ startHour, endHour }).catch(() => {
+    saveCalendarSettings({ startHour, endHour, selectedView }).catch(() => {
       // Calendar remains usable if preferences cannot be stored.
     });
-  }, [startHour, endHour, areCalendarSettingsLoaded]);
+  }, [startHour, endHour, selectedView, areCalendarSettingsLoaded]);
 
   useEffect(() => {
-    if (!areTasksLoaded || notificationPermission !== "granted") return;
+    if (!areWorkspacesLoaded) return;
+    saveWorkspaces(workspaces).catch(() => {});
+  }, [workspaces, areWorkspacesLoaded]);
+
+  useEffect(() => {
+    if (!areWorkspaceNotesLoaded) return;
+    saveWorkspaceNotes(workspaceNotes).catch(() => {});
+  }, [workspaceNotes, areWorkspaceNotesLoaded]);
+
+  useEffect(() => {
+    if (!areTasksLoaded || notificationPermission !== "granted" || isWidgetWindow) return;
 
     const checkReminders = () => {
       const now = new Date();
@@ -116,7 +268,39 @@ function App() {
     checkReminders();
     const reminderTimer = window.setInterval(checkReminders, 30_000);
     return () => window.clearInterval(reminderTimer);
-  }, [areTasksLoaded, notificationPermission]);
+  }, [areTasksLoaded, notificationPermission, isWidgetWindow]);
+
+  useEffect(() => {
+    if (!isEventsLoaded || notificationPermission !== "granted" || isWidgetWindow) return;
+
+    const checkBlockReminders = () => {
+      const now = new Date();
+      setEvents((currentEvents) => {
+        const today = expandEvents(currentEvents, now, now);
+        const reminders = today.filter((occurrence) =>
+          occurrence.sourceEvent.reminderEnabled
+          && occurrence.status !== "completed"
+          && new Date(occurrence.startAt) <= now
+          && !occurrence.sourceEvent.reminderNotifiedAt?.[occurrence.occurrenceKey],
+        );
+        if (reminders.length === 0) return currentEvents;
+
+        reminders.forEach((occurrence) => new Notification("MyDate · Bloque por comenzar", {
+          body: occurrence.title,
+          tag: `mydate-block-${occurrence.sourceEvent.id}-${occurrence.occurrenceKey}`,
+        }));
+        return currentEvents.map((event) => {
+          const eventReminders = reminders.filter((occurrence) => occurrence.sourceEvent.id === event.id);
+          if (eventReminders.length === 0) return event;
+          return { ...event, reminderNotifiedAt: { ...event.reminderNotifiedAt, ...Object.fromEntries(eventReminders.map((occurrence) => [occurrence.occurrenceKey, now.toISOString()])) } };
+        });
+      });
+    };
+
+    checkBlockReminders();
+    const reminderTimer = window.setInterval(checkBlockReminders, 30_000);
+    return () => window.clearInterval(reminderTimer);
+  }, [isEventsLoaded, notificationPermission, isWidgetWindow]);
 
   function toggleCompletion(eventId: string, occurrenceKey: string, origin: Celebration) {
     const eventToToggle = events.find((event) => event.id === eventId);
@@ -153,6 +337,7 @@ function App() {
 
   function deleteEvent(eventId: string) {
     setEvents((currentEvents) => currentEvents.filter((event) => event.id !== eventId));
+    deleteCloudEvent(user.id, eventId).catch((error) => console.error("No fue posible eliminar el bloque remoto.", error));
     setDialogEvent(null);
   }
 
@@ -181,7 +366,17 @@ function App() {
 
   function selectSection(section: AppSection) {
     setActiveSection(section);
+    setActiveWorkspaceId(null);
   }
+
+  function createWorkspace(workspace: Omit<Workspace, "id">) {
+    const createdWorkspace = { id: crypto.randomUUID(), ...workspace };
+    setWorkspaces((currentWorkspaces) => [...currentWorkspaces, createdWorkspace]);
+    setActiveWorkspaceId(createdWorkspace.id);
+    setIsWorkspaceDialogOpen(false);
+  }
+  function createCategory(category: Omit<import("./domain/calendar-category").CalendarCategory, "id">) { setCategories((current) => [...current, { id: crypto.randomUUID(), ...category }]); }
+  function deleteCategory(categoryId: string) { if (categories.length > 1) setCategories((current) => current.filter((category) => category.id !== categoryId)); }
 
   function createTask(input: Omit<Task, "id" | "completed" | "subtasks" | "createdAt">) {
     setTasks((currentTasks) => [...currentTasks, {
@@ -191,6 +386,20 @@ function App() {
       subtasks: [],
       createdAt: new Date().toISOString(),
     }]);
+  }
+
+  function createWorkspaceNote(workspaceId: string, title: string, content: string) {
+    const now = new Date().toISOString();
+    setWorkspaceNotes((notes) => [...notes, { id: crypto.randomUUID(), workspaceId, title, content, createdAt: now, updatedAt: now }]);
+  }
+
+  function updateWorkspaceNote(noteId: string, title: string, content: string) {
+    setWorkspaceNotes((notes) => notes.map((note) => note.id === noteId ? { ...note, title, content, updatedAt: new Date().toISOString() } : note));
+  }
+
+  function deleteWorkspaceNote(noteId: string) {
+    setWorkspaceNotes((notes) => notes.filter((note) => note.id !== noteId));
+    deleteCloudNote(user.id, noteId).catch((error) => console.error("No fue posible eliminar la nota remota.", error));
   }
 
   function toggleTask(taskId: string) {
@@ -219,6 +428,7 @@ function App() {
 
   function deleteTask(taskId: string) {
     setTasks((currentTasks) => currentTasks.filter((task) => task.id !== taskId));
+    deleteCloudTask(user.id, taskId).catch((error) => console.error("No fue posible eliminar la tarea remota.", error));
   }
 
   async function requestNotificationPermission() {
@@ -239,9 +449,64 @@ function App() {
     setCalendarStartDate(new Date(`${value}T00:00:00`));
   }
 
+  async function resetAllData() {
+    setIsResettingData(true);
+    try {
+      await clearCloudData(user.id);
+      await clearLocalMyDateData();
+      window.location.reload();
+    } catch (error) {
+      console.error("No fue posible reiniciar los datos.", error);
+      setIsResettingData(false);
+      setIsDataResetConfirmationOpen(false);
+    }
+  }
+
+  async function openWidget() {
+    if (!("__TAURI_INTERNALS__" in window)) {
+      window.alert("El widget está disponible al abrir MyDate como aplicación de escritorio.");
+      return;
+    }
+
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      await invoke("open_widget");
+      const { emitTo } = await import("@tauri-apps/api/event");
+      await emitTo("widget", "mydate:data-synchronized", {
+        events,
+        tasks,
+        workspaces,
+        notes: workspaceNotes,
+        categories,
+        settings: { startHour, endHour, selectedView },
+      } satisfies CloudState);
+    } catch (error) {
+      console.error("No fue posible abrir el widget.", error);
+    }
+  }
+
+  const isDesktopWidget = "__TAURI_INTERNALS__" in window && isWidgetWindow;
+
+  function dragWidgetWindow() {
+    if (!isDesktopWidget) return;
+    import("@tauri-apps/api/window")
+      .then(({ getCurrentWindow }) => getCurrentWindow().startDragging())
+      .catch((error) => console.error("No fue posible arrastrar el widget.", error));
+  }
+
+  function hideWidget() {
+    import("@tauri-apps/api/window")
+      .then(({ getCurrentWindow }) => getCurrentWindow().hide())
+      .catch((error) => console.error("No fue posible ocultar el widget.", error));
+  }
+
+  if (isDesktopWidget) {
+    return <main className="widget-shell"><div className="widget-drag-handle" data-tauri-drag-region onPointerDown={dragWidgetWindow} title="Arrastra para mover MyDate"><button type="button" className="widget-close-button" aria-label="Ocultar widget" title="Ocultar widget" onPointerDown={(event) => event.stopPropagation()} onClick={hideWidget}>×</button></div><CalendarGrid selectedView={selectedView} events={events} onToggleCompletion={toggleCompletion} onEditEvent={() => {}} startHour={startHour} endHour={endHour} calendarStartDate={calendarStartDate} onMoveEvent={() => {}} onResizeEvent={() => {}} workspaces={workspaces} categories={categories} isWidget /></main>;
+  }
+
   return (
     <main className="app-shell with-sidebar">
-      <SidebarRail activeSection={activeSection} onSelect={selectSection} />
+      <SidebarRail activeSection={activeSection} onSelect={selectSection} workspaces={workspaces} activeWorkspaceId={activeWorkspaceId} onSelectWorkspace={(workspaceId) => { setActiveWorkspaceId(workspaceId); setActiveSection("tasks"); }} onCreateWorkspace={() => setIsWorkspaceDialogOpen(true)} user={user} />
       <AppHeader
         onNewBlock={() => setDialogEvent("new")}
         showNewBlock={activeSection === "calendar"}
@@ -271,13 +536,17 @@ function App() {
         calendarStartDate={calendarStartDate}
         onMoveEvent={moveEvent}
         onResizeEvent={resizeEvent}
+        workspaces={workspaces}
+        categories={categories}
       /></>}
 
-      {activeSection === "tasks" && <TasksPanel tasks={tasks} notificationPermission={notificationPermission} onRequestNotifications={requestNotificationPermission} onCreate={createTask} onToggleTask={toggleTask} onToggleSubtask={toggleSubtask} onAddSubtask={addSubtask} onDeleteTask={deleteTask} />}
+      {activeSection === "tasks" && (activeWorkspaceId ? <WorkspacePanel workspace={workspaces.find((workspace) => workspace.id === activeWorkspaceId)!} tasks={tasks.filter((task) => task.workspaceId === activeWorkspaceId)} notes={workspaceNotes.filter((note) => note.workspaceId === activeWorkspaceId)} onCreateBlock={() => setDialogEvent("new")} notificationPermission={notificationPermission} onRequestNotifications={requestNotificationPermission} onCreateTask={createTask} onToggleTask={toggleTask} onToggleSubtask={toggleSubtask} onAddSubtask={addSubtask} onDeleteTask={deleteTask} onCreateNote={createWorkspaceNote} onUpdateNote={updateWorkspaceNote} onDeleteNote={deleteWorkspaceNote} /> : <TasksPanel tasks={tasks} notificationPermission={notificationPermission} onRequestNotifications={requestNotificationPermission} onCreate={createTask} onToggleTask={toggleTask} onToggleSubtask={toggleSubtask} onAddSubtask={addSubtask} onDeleteTask={deleteTask} />)}
 
       {activeSection === "finances" && <section className="module-placeholder"><p className="module-eyebrow">Planificado para una próxima fase</p><h1>Finanzas</h1><p>Aquí podrás registrar movimientos, presupuestos y metas de ahorro con tus datos locales.</p><div className="placeholder-card"><span>₵</span><div><strong>Tu dinero, con claridad</strong><small>La primera versión incluirá cuentas, ingresos y gastos.</small></div></div></section>}
 
-      {activeSection === "settings" && <CalendarSettings startHour={startHour} endHour={endHour} onStartHourChange={changeStartHour} onEndHourChange={changeEndHour} onBack={() => setActiveSection("calendar")} />}
+      {activeSection === "settings" && <CalendarSettings startHour={startHour} endHour={endHour} onStartHourChange={changeStartHour} onEndHourChange={changeEndHour} onBack={() => setActiveSection("calendar")} onRequestDataReset={() => setIsDataResetConfirmationOpen(true)} onOpenWidget={openWidget}><CategorySettings categories={categories} onCreate={createCategory} onDelete={deleteCategory} /></CalendarSettings>}
+
+      {isDataResetConfirmationOpen && <div className="delete-confirmation-backdrop"><section className="delete-confirmation" role="dialog" aria-modal="true"><p className="delete-icon">!</p><h3>¿Reiniciar todos los datos?</h3><p>Se eliminarán permanentemente los datos de prueba de esta cuenta en Supabase y de este dispositivo.</p><div className="delete-confirmation-actions"><button type="button" className="secondary-button" disabled={isResettingData} onClick={() => setIsDataResetConfirmationOpen(false)}>Cancelar</button><button type="button" className="delete-confirm-button" disabled={isResettingData} onClick={resetAllData}>{isResettingData ? "Reiniciando…" : "Sí, reiniciar"}</button></div></section></div>}
 
       {celebration && (
         <div
@@ -298,11 +567,16 @@ function App() {
         <NewEventDialog
           event={dialogEvent === "new" ? undefined : dialogEvent}
           defaultDate={calendarStartDate}
+          defaultWorkspaceId={activeWorkspaceId ?? undefined}
+          workspaces={workspaces}
+          categories={categories}
           onClose={() => setDialogEvent(null)}
           onSave={saveEvent}
           onDelete={deleteEvent}
         />
       )}
+
+      {isWorkspaceDialogOpen && <NewWorkspaceDialog onClose={() => setIsWorkspaceDialogOpen(false)} onSave={createWorkspace} />}
 
     </main>
   );

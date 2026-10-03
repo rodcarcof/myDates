@@ -11,6 +11,9 @@ type TasksPanelProps = {
   onToggleSubtask: (taskId: string, subtaskId: string) => void;
   onAddSubtask: (taskId: string, title: string) => void;
   onDeleteTask: (taskId: string) => void;
+  workspaceId?: string;
+  heading?: string;
+  description?: string;
 };
 
 const priorityLabels: Record<TaskPriority, string> = {
@@ -29,6 +32,9 @@ function TasksPanel({
   onToggleSubtask,
   onAddSubtask,
   onDeleteTask,
+  workspaceId,
+  heading = "Tareas",
+  description = "Organiza lo que debes hacer sin forzarlo aún a un horario.",
 }: TasksPanelProps) {
   const [isCreating, setIsCreating] = useState(false);
   const [title, setTitle] = useState("");
@@ -49,6 +55,7 @@ function TasksPanel({
       title: trimmedTitle,
       icon: icon.trim() || "✓",
       priority,
+      ...(workspaceId ? { workspaceId } : {}),
       ...(hasReminder && reminderDate ? { reminderDate, reminderTime: reminderTime || undefined } : {}),
     });
     setTitle("");
@@ -79,8 +86,8 @@ function TasksPanel({
       <div className="tasks-heading">
         <div>
           <p className="module-eyebrow">Módulo independiente</p>
-          <h1>Tareas</h1>
-          <p>Organiza lo que debes hacer sin forzarlo aún a un horario.</p>
+          <h1>{heading}</h1>
+          <p>{description}</p>
         </div>
         <button type="button" className="primary-button" onClick={() => setIsCreating(true)}>
           + Nueva tarea

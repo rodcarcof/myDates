@@ -1,8 +1,4 @@
-export type EventCategory =
-  | "focus"
-  | "work"
-  | "health"
-  | "personal";
+export type EventCategory = string;
 
 export type EventStatus = "planned" | "completed";
 
@@ -22,4 +18,9 @@ export type CalendarEvent = {
   status: EventStatus;
   recurrence?: RecurrenceRule;
   occurrenceStatuses?: Record<string, EventStatus>;
+  workspaceId?: string;
+  categoryId?: string;
+  categoryColor?: string;
+  reminderEnabled?: boolean;
+  reminderNotifiedAt?: Record<string, string>;
 };

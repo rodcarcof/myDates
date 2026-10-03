@@ -17,4 +17,5 @@ export type Task = {
   reminderDate?: string;
   reminderTime?: string;
   reminderNotifiedAt?: string;
+  workspaceId?: string;
 };

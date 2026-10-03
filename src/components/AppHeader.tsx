@@ -5,7 +5,7 @@ type AppHeaderProps = {
 
 function AppHeader({ onNewBlock, showNewBlock }: AppHeaderProps) {
   return (
-    <header className="app-header">
+    <header className="app-header widget-drag-region" data-tauri-drag-region>
       <div className="header-identity">
         <div>
           <p className="brand">MyDate</p>
@@ -13,7 +13,7 @@ function AppHeader({ onNewBlock, showNewBlock }: AppHeaderProps) {
         </div>
       </div>
 
-      {showNewBlock && <button type="button" className="primary-button" onClick={onNewBlock}>+ Nuevo bloque</button>}
+      {showNewBlock && <button type="button" className="primary-button" data-tauri-drag-region="false" onClick={onNewBlock}>+ Nuevo bloque</button>}
     </header>
   );
 }
