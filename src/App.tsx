@@ -30,7 +30,7 @@ type Celebration = {
 };
 type DialogEvent = "new" | CalendarEvent | null;
 
-const daysByView: Record<CalendarView, number> = { day: 1, "three-days": 3, "five-days": 5, week: 7 };
+const daysByView: Record<CalendarView, number> = { day: 1, "two-days": 2, "three-days": 3, "five-days": 5, week: 7 };
 
 type AppProps = { user: User };
 
@@ -63,10 +63,6 @@ function App({ user }: AppProps) {
   const cloudSyncTimer = useRef<number | null>(null);
   const skipNextCloudSync = useRef(false);
   const hasPersistedLocalData = useRef(false);
-
-  const completedEvents = events.filter(
-    (event) => event.status === "completed",
-  ).length;
 
   useEffect(() => {
     loadEvents()
@@ -609,11 +605,8 @@ function App({ user }: AppProps) {
         onNext={() => moveCalendar(1)}
         onToday={() => setCalendarStartDate(new Date())}
         onDateChange={goToDate}
+        onOpenWidget={openWidget}
       />
-
-      <p className="completion-summary" aria-live="polite">
-        <strong>{completedEvents}</strong> de {events.length} bloques completados
-      </p>
 
       <CalendarGrid
         selectedView={selectedView}
@@ -633,7 +626,7 @@ function App({ user }: AppProps) {
 
       {activeSection === "finances" && <section className="module-placeholder"><p className="module-eyebrow">Planificado para una próxima fase</p><h1>Finanzas</h1><p>Aquí podrás registrar movimientos, presupuestos y metas de ahorro con tus datos locales.</p><div className="placeholder-card"><span>₵</span><div><strong>Tu dinero, con claridad</strong><small>La primera versión incluirá cuentas, ingresos y gastos.</small></div></div></section>}
 
-      {activeSection === "settings" && <CalendarSettings startHour={startHour} endHour={endHour} onStartHourChange={changeStartHour} onEndHourChange={changeEndHour} onBack={() => setActiveSection("calendar")} onRequestDataReset={() => setIsDataResetConfirmationOpen(true)} onOpenWidget={openWidget}><CategorySettings categories={categories} onCreate={createCategory} onDelete={deleteCategory} /></CalendarSettings>}
+      {activeSection === "settings" && <CalendarSettings startHour={startHour} endHour={endHour} onStartHourChange={changeStartHour} onEndHourChange={changeEndHour} onBack={() => setActiveSection("calendar")} onRequestDataReset={() => setIsDataResetConfirmationOpen(true)}><CategorySettings categories={categories} onCreate={createCategory} onDelete={deleteCategory} /></CalendarSettings>}
 
       {isDataResetConfirmationOpen && <div className="delete-confirmation-backdrop"><section className="delete-confirmation" role="dialog" aria-modal="true"><p className="delete-icon">!</p><h3>¿Reiniciar todos los datos?</h3><p>Se eliminarán permanentemente los datos de prueba de esta cuenta en Supabase y de este dispositivo.</p><div className="delete-confirmation-actions"><button type="button" className="secondary-button" disabled={isResettingData} onClick={() => setIsDataResetConfirmationOpen(false)}>Cancelar</button><button type="button" className="delete-confirm-button" disabled={isResettingData} onClick={resetAllData}>{isResettingData ? "Reiniciando…" : "Sí, reiniciar"}</button></div></section></div>}
 

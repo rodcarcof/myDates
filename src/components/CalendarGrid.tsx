@@ -35,6 +35,7 @@ const HEADER_HEIGHT = 52;
 
 const daysByView: Record<CalendarView, number> = {
   day: 1,
+  "two-days": 2,
   "three-days": 3,
   "five-days": 5,
   week: 7,

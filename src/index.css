@@ -107,6 +107,29 @@ button {
   font-size: 1.125rem;
 }
 
+.calendar-toolbar-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.open-widget-button {
+  border: 1px solid #cbdacb;
+  border-radius: 9px;
+  padding: 9px 11px;
+  background: white;
+  color: #244a35;
+  font-size: .82rem;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.open-widget-button:hover {
+  border-color: #6da778;
+  background: #eff8ef;
+}
+
 .date-navigation { display: flex; align-items: center; gap: 7px; }.date-navigation h1 { min-width: 168px; }.date-arrow { display: grid; width: 30px; height: 30px; place-items: center; border: 1px solid #d7e0d8; border-radius: 8px; background: white; color: #173d2b; font-size: 1.45rem; line-height: 1; }.date-arrow:hover, .today-button:hover { background: #edf4ed; }.today-button { border: 1px solid #d7e0d8; border-radius: 8px; padding: 6px 9px; background: white; color: #365343; font-size: .78rem; font-weight: 800; }.date-jump { width: 138px; height: 31px; padding: 0 7px; border: 1px solid #d7e0d8; border-radius: 8px; background: white; color: #173d2b; font-size: .78rem; font-weight: 700; }
 
 .toolbar-controls {
@@ -132,16 +155,6 @@ button {
   background: white;
   color: #173d2b;
   font-weight: 700;
-}
-
-.completion-summary {
-  margin: 0 0 12px;
-  color: #627067;
-  font-size: 0.875rem;
-}
-
-.completion-summary strong {
-  color: #1c6a35;
 }
 
 .menu-backdrop { position: fixed; z-index: 30; inset: 0; background: rgb(16 36 24 / 34%); }
@@ -698,6 +711,11 @@ button {
   .calendar-toolbar {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .calendar-toolbar-actions {
+    width: 100%;
+    justify-content: space-between;
   }
 
   .toolbar-controls {

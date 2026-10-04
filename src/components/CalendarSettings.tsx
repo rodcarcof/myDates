@@ -5,11 +5,10 @@ type CalendarSettingsProps = {
   onEndHourChange: (hour: number) => void;
   onBack: () => void;
   onRequestDataReset: () => void;
-  onOpenWidget: () => void;
   children?: React.ReactNode;
 };
 
-function CalendarSettings({ startHour, endHour, onStartHourChange, onEndHourChange, onBack, onRequestDataReset, onOpenWidget, children }: CalendarSettingsProps) {
+function CalendarSettings({ startHour, endHour, onStartHourChange, onEndHourChange, onBack, onRequestDataReset, children }: CalendarSettingsProps) {
   const hours = Array.from({ length: 24 }, (_, hour) => hour);
 
   return <section className="settings-module">
@@ -26,7 +25,6 @@ function CalendarSettings({ startHour, endHour, onStartHourChange, onEndHourChan
       </div>
       <p className="settings-save-note">Los cambios se guardan automáticamente en este dispositivo.</p>
     </div>
-    <div className="settings-card"><div><h2>Widget de escritorio</h2><p>Abre una ventana compacta con solo el calendario. Puedes moverla y marcar bloques como realizados.</p></div><button type="button" className="primary-button" onClick={onOpenWidget}>Abrir widget</button></div>
     {children}
     <div className="settings-card settings-danger-card"><div><h2>Datos de prueba</h2><p>Elimina los bloques, tareas, espacios, notas y preferencias de esta cuenta, tanto en Supabase como en este dispositivo.</p></div><button type="button" className="delete-confirm-button" onClick={onRequestDataReset}>Reiniciar datos</button></div>
   </section>;

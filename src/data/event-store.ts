@@ -14,7 +14,7 @@ const WORKSPACES_KEY = "workspaces";
 const WORKSPACE_NOTES_KEY = "workspace-notes";
 const CALENDAR_CATEGORIES_KEY = "calendar-categories";
 
-export type CalendarViewPreference = "day" | "three-days" | "five-days" | "week";
+export type CalendarViewPreference = "day" | "two-days" | "three-days" | "five-days" | "week";
 export type CalendarSettings = {
   startHour: number;
   endHour: number;

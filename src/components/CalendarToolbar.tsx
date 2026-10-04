@@ -1,4 +1,4 @@
-export type CalendarView = "day" | "three-days" | "five-days" | "week";
+export type CalendarView = "day" | "two-days" | "three-days" | "five-days" | "week";
 
 type Props = {
   selectedView: CalendarView;
@@ -8,10 +8,12 @@ type Props = {
   onNext: () => void;
   onToday: () => void;
   onDateChange: (value: string) => void;
+  onOpenWidget: () => void;
 };
 
 const views: { label: string; value: CalendarView; days: number }[] = [
   { label: "Día", value: "day", days: 1 },
+  { label: "2 días", value: "two-days", days: 2 },
   { label: "3 días", value: "three-days", days: 3 },
   { label: "5 días", value: "five-days", days: 5 },
   { label: "Semana", value: "week", days: 7 },
@@ -28,7 +30,7 @@ function titleForRange(start: Date, length: number) {
   return length === 1 ? format(start) : `${format(start)} – ${format(end)}`;
 }
 
-function CalendarToolbar({ selectedView, onViewChange, calendarStartDate, onPrevious, onNext, onToday, onDateChange }: Props) {
+function CalendarToolbar({ selectedView, onViewChange, calendarStartDate, onPrevious, onNext, onToday, onDateChange, onOpenWidget }: Props) {
   const selectedLength = views.find((view) => view.value === selectedView)?.days ?? 7;
 
   return <section className="calendar-toolbar">
@@ -40,7 +42,10 @@ function CalendarToolbar({ selectedView, onViewChange, calendarStartDate, onPrev
       <input className="date-jump" type="date" value={localDateValue(calendarStartDate)} onChange={(event) => onDateChange(event.target.value)} aria-label="Ir a una fecha" />
     </div>
 
-    <div className="view-selector">{views.map((view) => <button key={view.value} type="button" className={selectedView === view.value ? "view-button active" : "view-button"} onClick={() => onViewChange(view.value)}>{view.label}</button>)}</div>
+    <div className="calendar-toolbar-actions">
+      <button type="button" className="open-widget-button" onClick={onOpenWidget}>▣ Abrir widget</button>
+      <div className="view-selector">{views.map((view) => <button key={view.value} type="button" className={selectedView === view.value ? "view-button active" : "view-button"} onClick={() => onViewChange(view.value)}>{view.label}</button>)}</div>
+    </div>
   </section>;
 }
 
