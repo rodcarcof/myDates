@@ -7,6 +7,7 @@ function AppHeader({ onNewBlock, showNewBlock }: AppHeaderProps) {
   return (
     <header className="app-header widget-drag-region" data-tauri-drag-region>
       <div className="header-identity">
+        <img className="app-brand-icon" src="/mydate-calendar-check-square.png" alt="" />
         <div>
           <p className="brand">MyDate</p>
           <p className="brand-subtitle">Tu semana, en movimiento</p>

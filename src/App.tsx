@@ -308,6 +308,7 @@ function App({ user }: AppProps) {
       ? eventToToggle.occurrenceStatuses?.[occurrenceKey] !== "completed"
       : eventToToggle?.status !== "completed";
 
+    const now = Date.now();
     setEvents((currentEvents) =>
       currentEvents.map((event) =>
         event.id !== eventId ? event : event.recurrence ? {
@@ -316,7 +317,24 @@ function App({ user }: AppProps) {
             ...event.occurrenceStatuses,
             [occurrenceKey]: event.occurrenceStatuses?.[occurrenceKey] === "completed" ? "planned" : "completed",
           },
-        } : { ...event, status: event.status === "completed" ? "planned" : "completed" },
+          occurrenceTimers: {
+            ...event.occurrenceTimers,
+            [occurrenceKey]: (() => {
+              const timer = event.occurrenceTimers?.[occurrenceKey] ?? { elapsedSeconds: 0 };
+              return {
+                elapsedSeconds: timer.elapsedSeconds + (timer.startedAt ? Math.max(0, Math.floor((now - new Date(timer.startedAt).getTime()) / 1000)) : 0),
+              startedAt: undefined,
+              };
+            })(),
+          },
+        } : {
+          ...event,
+          status: event.status === "completed" ? "planned" : "completed",
+          // Una finalización manual también detiene el cronómetro; así no
+          // vuelve a completar ni sigue contando en segundo plano.
+          timerElapsedSeconds: event.timerStartedAt ? eventElapsedSeconds(event, now) : event.timerElapsedSeconds,
+          timerStartedAt: undefined,
+        },
       ),
     );
 
@@ -325,6 +343,77 @@ function App({ user }: AppProps) {
       window.setTimeout(() => setCelebration(null), 950);
     }
   }
+
+  function eventElapsedSeconds(event: CalendarEvent, now: number) {
+    const saved = event.timerElapsedSeconds ?? 0;
+    if (!event.timerStartedAt) return saved;
+    return saved + Math.max(0, Math.floor((now - new Date(event.timerStartedAt).getTime()) / 1000));
+  }
+
+  function toggleEventTimer(eventId: string, occurrenceKey: string) {
+    const now = Date.now();
+    setEvents((currentEvents) => currentEvents.map((event) => {
+      if (event.id === eventId) {
+        if (event.recurrence) {
+          if (event.occurrenceStatuses?.[occurrenceKey] === "completed") return event;
+          const timer = event.occurrenceTimers?.[occurrenceKey] ?? { elapsedSeconds: 0 };
+          const elapsedSeconds = timer.elapsedSeconds + (timer.startedAt ? Math.max(0, Math.floor((now - new Date(timer.startedAt).getTime()) / 1000)) : 0);
+          return {
+            ...event,
+            occurrenceTimers: {
+              ...event.occurrenceTimers,
+              [occurrenceKey]: timer.startedAt
+                ? { elapsedSeconds }
+                : { elapsedSeconds, startedAt: new Date(now).toISOString() },
+            },
+          };
+        }
+        if (event.status === "completed") return event;
+        if (event.timerStartedAt) return { ...event, timerElapsedSeconds: eventElapsedSeconds(event, now), timerStartedAt: undefined };
+        return { ...event, timerStartedAt: new Date(now).toISOString() };
+      }
+      if (event.recurrence && event.occurrenceTimers) {
+        const occurrenceTimers = Object.fromEntries(Object.entries(event.occurrenceTimers).map(([key, timer]) => [key, timer.startedAt ? { elapsedSeconds: timer.elapsedSeconds + Math.max(0, Math.floor((now - new Date(timer.startedAt).getTime()) / 1000)) } : timer]));
+        return { ...event, occurrenceTimers };
+      }
+      return event.timerStartedAt
+        ? { ...event, timerElapsedSeconds: eventElapsedSeconds(event, now), timerStartedAt: undefined }
+        : event;
+    }));
+  }
+
+  useEffect(() => {
+    const completeFinishedTimers = () => {
+      setEvents((currentEvents) => {
+        const now = Date.now();
+        let didComplete = false;
+        const nextEvents = currentEvents.map((event) => {
+          if (event.recurrence && event.occurrenceTimers) {
+            let changed = false;
+            const occurrenceTimers = { ...event.occurrenceTimers };
+            const occurrenceStatuses = { ...event.occurrenceStatuses };
+            for (const [key, timer] of Object.entries(occurrenceTimers)) {
+              if (!timer.startedAt || occurrenceStatuses[key] === "completed") continue;
+              const plannedSeconds = Math.max(0, Math.round((new Date(event.endAt).getTime() - new Date(event.startAt).getTime()) / 1000));
+              const elapsedSeconds = timer.elapsedSeconds + Math.max(0, Math.floor((now - new Date(timer.startedAt).getTime()) / 1000));
+              if (elapsedSeconds >= plannedSeconds) { occurrenceTimers[key] = { elapsedSeconds: plannedSeconds }; occurrenceStatuses[key] = "completed"; changed = true; }
+            }
+            if (changed) { didComplete = true; return { ...event, occurrenceTimers, occurrenceStatuses }; }
+            return event;
+          }
+          if (!event.timerStartedAt || event.status === "completed") return event;
+          const plannedSeconds = Math.max(0, Math.round((new Date(event.endAt).getTime() - new Date(event.startAt).getTime()) / 1000));
+          const elapsed = eventElapsedSeconds(event, now);
+          if (elapsed < plannedSeconds) return event;
+          didComplete = true;
+          return { ...event, status: "completed" as const, timerElapsedSeconds: plannedSeconds, timerStartedAt: undefined };
+        });
+        return didComplete ? nextEvents : currentEvents;
+      });
+    };
+    const timer = window.setInterval(completeFinishedTimers, 1000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   function saveEvent(input: NewEventInput) {
     if (dialogEvent === "new") {
@@ -501,7 +590,7 @@ function App({ user }: AppProps) {
   }
 
   if (isDesktopWidget) {
-    return <main className="widget-shell"><div className="widget-drag-handle" data-tauri-drag-region onPointerDown={dragWidgetWindow} title="Arrastra para mover MyDate"><button type="button" className="widget-close-button" aria-label="Ocultar widget" title="Ocultar widget" onPointerDown={(event) => event.stopPropagation()} onClick={hideWidget}>×</button></div><CalendarGrid selectedView={selectedView} events={events} onToggleCompletion={toggleCompletion} onEditEvent={() => {}} startHour={startHour} endHour={endHour} calendarStartDate={calendarStartDate} onMoveEvent={() => {}} onResizeEvent={() => {}} workspaces={workspaces} categories={categories} isWidget /></main>;
+    return <main className="widget-shell"><div className="widget-drag-handle" data-tauri-drag-region onPointerDown={dragWidgetWindow} title="Arrastra para mover MyDate"><button type="button" className="widget-close-button" aria-label="Ocultar widget" title="Ocultar widget" onPointerDown={(event) => event.stopPropagation()} onClick={hideWidget}>×</button></div><CalendarGrid selectedView={selectedView} events={events} onToggleCompletion={toggleCompletion} onToggleTimer={toggleEventTimer} onEditEvent={() => {}} startHour={startHour} endHour={endHour} calendarStartDate={calendarStartDate} onMoveEvent={() => {}} onResizeEvent={() => {}} workspaces={workspaces} categories={categories} isWidget /></main>;
   }
 
   return (

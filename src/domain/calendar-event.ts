@@ -9,6 +9,11 @@ export type RecurrenceRule = {
   until?: string;
 };
 
+export type EventTimer = {
+  elapsedSeconds: number;
+  startedAt?: string;
+};
+
 export type CalendarEvent = {
   id: string;
   title: string;
@@ -23,4 +28,10 @@ export type CalendarEvent = {
   categoryColor?: string;
   reminderEnabled?: boolean;
   reminderNotifiedAt?: Record<string, string>;
+  /** Segundos acumulados cuando el cronómetro está pausado. */
+  timerElapsedSeconds?: number;
+  /** Fecha de inicio del tramo que está corriendo; ausente significa pausado. */
+  timerStartedAt?: string;
+  /** Cronómetros separados para cada ocurrencia de un bloque repetitivo. */
+  occurrenceTimers?: Record<string, EventTimer>;
 };

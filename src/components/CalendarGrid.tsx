@@ -22,6 +22,7 @@ type CalendarGridProps = {
   workspaces: Workspace[];
   categories: CalendarCategory[];
   isWidget?: boolean;
+  onToggleTimer?: (eventId: string, occurrenceKey: string) => void;
 };
 
 type DragState = { eventId: string; sourceEvent: CalendarEvent; durationHours: number; offsetY: number; originX: number; originY: number; moved: boolean };
@@ -88,6 +89,21 @@ function formatTime(date: Date) {
   });
 }
 
+function timerForOccurrence(event: CalendarEvent, occurrenceKey: string) {
+  if (event.recurrence) return event.occurrenceTimers?.[occurrenceKey] ?? { elapsedSeconds: 0 };
+  return { elapsedSeconds: event.timerElapsedSeconds ?? 0, startedAt: event.timerStartedAt };
+}
+
+function formatDuration(seconds: number) {
+  const total = Math.max(0, Math.floor(seconds));
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const remainder = total % 60;
+  return hours > 0
+    ? `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(remainder).padStart(2, "0")}`
+    : `${String(minutes).padStart(2, "0")}:${String(remainder).padStart(2, "0")}`;
+}
+
 type OverlapPlacement = { column: number; columns: number };
 
 function layoutOverlappingEvents(events: CalendarOccurrence[]) {
@@ -147,6 +163,7 @@ function CalendarGrid({
   onResizeEvent,
   categories,
   isWidget = false,
+  onToggleTimer,
 }: CalendarGridProps) {
   const upcomingDays = createUpcomingDays(calendarStartDate);
   const eventLayerRef = useRef<HTMLDivElement>(null);
@@ -156,7 +173,7 @@ function CalendarGrid({
   const [draggedEventId, setDraggedEventId] = useState<string | null>(null);
   const [dragPreview, setDragPreview] = useState<DragPreview | null>(null);
   const [resizePreview, setResizePreview] = useState<ResizePreview | null>(null);
-  const [viewportHeight, setViewportHeight] = useState(() => window.innerHeight);
+  const [timerNow, setTimerNow] = useState(() => Date.now());
 
   const visibleDays = upcomingDays.slice(
     0,
@@ -169,11 +186,14 @@ function CalendarGrid({
   );
   // El widget no debe encoger las horas para intentar mostrar el día entero:
   // mantiene bloques legibles y el contenedor permite desplazarse con la rueda.
-  const hourHeight = isWidget
-    ? 72
-    : Math.max(24, Math.min(62, Math.floor((viewportHeight - 250) / hours.length)));
+  const hourHeight = isWidget ? 72 : 52;
 
-  useEffect(() => { const updateHeight = () => setViewportHeight(window.innerHeight); window.addEventListener("resize", updateHeight); return () => window.removeEventListener("resize", updateHeight); }, []);
+  useEffect(() => {
+    if (!isWidget || !events.some((event) => event.timerStartedAt || Object.values(event.occurrenceTimers ?? {}).some((timer) => timer.startedAt))) return;
+    setTimerNow(Date.now());
+    const timer = window.setInterval(() => setTimerNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [events, isWidget]);
 
   const visibleEvents = expandEvents(
     events,
@@ -379,7 +399,7 @@ function CalendarGrid({
                         right: "auto",
                         width: `calc(${columnWidth}% - 8px)`,
                         top: `${(startHour - visibleStartHour) * hourHeight + 4}px`,
-                        height: `${isWidget ? Math.max(durationHours * hourHeight - 8, 38) : durationHours * hourHeight - 8}px`,
+                        height: `${isWidget ? Math.max(durationHours * hourHeight - 8, 64) : Math.max(durationHours * hourHeight - 8, 36)}px`,
                         ...((category?.color ?? event.categoryColor) && event.status !== "completed" ? { backgroundColor: category?.color ?? event.categoryColor } : {}),
                       }}
                       onPointerDown={(pointerEvent) => startEventInteraction(pointerEvent, event.sourceEvent, durationHours, startDate, endDate, Boolean(event.sourceEvent.recurrence))}
@@ -413,6 +433,18 @@ function CalendarGrid({
                         <strong>{event.title}</strong>
                         <span>{formatTime(startDate)} – {formatTime(endDate)}</span>
                       </button>
+                      {isWidget && event.status !== "completed" && onToggleTimer && (() => {
+                        const timer = timerForOccurrence(event.sourceEvent, event.occurrenceKey);
+                        const elapsed = timer.elapsedSeconds + (timer.startedAt ? Math.max(0, Math.floor((timerNow - new Date(timer.startedAt).getTime()) / 1000)) : 0);
+                        const planned = Math.max(0, Math.round((new Date(event.sourceEvent.endAt).getTime() - new Date(event.sourceEvent.startAt).getTime()) / 1000));
+                        const isRunning = Boolean(timer.startedAt);
+                        return <div className="widget-timer-row" onPointerDown={(pointerEvent) => pointerEvent.stopPropagation()} onPointerUp={(pointerEvent) => pointerEvent.stopPropagation()}>
+                          <button type="button" className={`widget-timer-toggle${isRunning ? " is-running" : ""}`} aria-label={`${isRunning ? "Pausar" : "Iniciar"} cronómetro: ${event.title}`} onClick={(clickEvent) => { clickEvent.stopPropagation(); onToggleTimer(event.sourceEvent.id, event.occurrenceKey); }}>
+                            <span aria-hidden="true">{isRunning ? "Ⅱ" : "▶"}</span>{isRunning ? "Pausar" : elapsed > 0 ? "Seguir" : "Iniciar"}
+                          </button>
+                          <output className="widget-timer-readout">{formatDuration(elapsed)} / {formatDuration(planned)}</output>
+                        </div>;
+                      })()}
                       <button
                         type="button"
                         className="event-complete-button"
